@@ -1,37 +1,89 @@
 # cluster-timewheel
 
-#### 介绍
+### 介绍
 go实现的时间轮，可单机可分布式  
 
-#### 软件架构
-软件架构说明
+### 案例
 
+### 回调函数
 
-#### 安装教程
+```go
 
-1.  xxxx
-2.  xxxx
-3.  xxxx
+const (
+    Call1 CallId = iota
+    Call2
+    Call3
+)
 
-#### 使用说明
+func init() {
+    AddCall(Call1, func(ctx *Context) {
+        fmt.Println("call1", ctx.Name)
+    })
+    
+    AddCall(Call2, func(ctx *Context) {
+        fmt.Println("call2", ctx.Name)
+        panic("run")
+    })
+    
+    AddCall(Call3, func(ctx *Context) {
+        fmt.Println("call3", ctx.Name)
+    })
+}
 
-1.  xxxx
-2.  xxxx
-3.  xxxx
+```
 
-#### 参与贡献
+#### 单机
+```go
 
-1.  Fork 本仓库
-2.  新建 Feat_xxx 分支
-3.  提交代码
-4.  新建 Pull Request
+func main() {
+    wheel := NewLocal(time.Second, 60)
+    wheel.Run()
+    for i := 0; i < 10; i++ {
+        tp := Call1
+        if i%2 == 0 {
+            tp = Call2
+        }
+        wheel.AddTimer(time.Second*time.Duration(i), fmt.Sprintf("id-%d", i), nil, tp)
+    }
+    wheel.AddTimer(time.Second*3, "1", nil, Call1)
+    
+    wheel.AddTimer(time.Second*20, "7", nil, Call3)
+    after := time.After(time.Second * 3)
+    select {
+    case <-after:
+        wheel.RemoveTimer("7")
+    }
+    select {}
+}
+```
 
+#### 分布式
+```go
 
-#### 特技
+func main() {
 
-1.  使用 Readme\_XXX.md 来支持不同的语言，例如 Readme\_en.md, Readme\_zh.md
-2.  Gitee 官方博客 [blog.gitee.com](https://blog.gitee.com)
-3.  你可以 [https://gitee.com/explore](https://gitee.com/explore) 这个地址来了解 Gitee 上的优秀开源项目
-4.  [GVP](https://gitee.com/gvp) 全称是 Gitee 最有价值开源项目，是综合评定出的优秀开源项目
-5.  Gitee 官方提供的使用手册 [https://gitee.com/help](https://gitee.com/help)
-6.  Gitee 封面人物是一档用来展示 Gitee 会员风采的栏目 [https://gitee.com/gitee-stars/](https://gitee.com/gitee-stars/)
+    client := redis.NewClient(&redis.Options{
+    Addr: "127.0.0.1:6379",
+    })
+
+    wheel := NewCluster(client, Options{
+        Key:      "redis-wheel",
+        Interval: time.Second,
+        SlotNums: 60,
+    })
+
+    wheel.Run()
+
+    for i := 0; i < 1000; i++ {
+        tp := Call1
+        if i%2 == 0 {
+        tp = Call2
+        }
+        ctx := NewContext("cl1")
+        wheel.AddTimer(time.Second*time.Duration(i), fmt.Sprintf("id-%d", i), ctx, tp)
+    }
+    select {}
+	
+}
+
+```
