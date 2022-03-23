@@ -1,4 +1,4 @@
-module gitee.com/burybell/cluster-timewheel
+module github.com/burybell/cluster-timewheel
 
 go 1.18
 
