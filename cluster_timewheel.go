@@ -1,30 +1,38 @@
 package timewheel
 
 import (
-	"encoding/json"
 	"fmt"
 	"github.com/go-redis/redis"
 	"log"
-	"strconv"
+	"strings"
 	"time"
 )
 
 type Options struct {
-	Key      string        `json:"key,omitempty"`
 	Interval time.Duration `json:"interval,omitempty"`
 	SlotNums int           `json:"slotNums,omitempty"`
+	MergeVal bool          `json:"merge,omitempty"`
 }
 
-func (options *Options) From(bytes string) {
-	_ = json.Unmarshal([]byte(bytes), options)
+func (options *Options) normalize() {
+	options.Interval = time.Second
+	options.SlotNums = 60
+	options.MergeVal = false
 }
 
-func (options *Options) String() string {
-	bytes, err := json.Marshal(options)
-	if err != nil {
-		return ""
+func (options *Options) Val() string {
+	return fmt.Sprintf("%d-%d", int64(options.Interval.Seconds()), options.SlotNums)
+}
+
+func newOptions(value string) *Options {
+	options := new(Options)
+	if val := strings.Split(value, "-"); len(val) == 2 {
+		options.Interval = time.Second * time.Duration(Int(val[0]))
+		options.SlotNums = Int(val[1])
+	} else {
+		options.normalize()
 	}
-	return string(bytes)
+	return options
 }
 
 type ClusterTimeWheel struct {
@@ -38,89 +46,134 @@ type ClusterTimeWheel struct {
 	stopChan   chan struct{}
 }
 
-func NewCluster(client *redis.Client, options Options) TimeWheel {
-	if client == nil || len(options.Key) == 0 {
+func NewCluster(client *redis.Client, key string, options *Options) TimeWheel {
+	if client == nil || len(key) == 0 {
 		return nil
+	}
+
+	if options == nil {
+		options = new(Options)
+		options.normalize()
+	}
+
+	if options.MergeVal {
+		client.Set(key, options.Val(), -1)
+	} else {
+		if val := client.Get(key); val.Err() == nil && len(val.Val()) > 0 {
+			options = newOptions(val.Val())
+		} else {
+			client.Set(key, options.Val(), -1)
+		}
 	}
 
 	var wheel ClusterTimeWheel
 	wheel.client = client
-	wheel.key = options.Key
-	wheel.init(&options)
+	wheel.key = key
 	wheel.interval = options.Interval
 	wheel.slotNums = options.SlotNums
 	wheel.slots = make([]string, wheel.slotNums)
 	wheel.stopChan = make(chan struct{})
 	for i := 0; i < wheel.slotNums; i++ {
-		wheel.slots[i] = wheel.slotKey(i)
+		wheel.slots[i] = fmt.Sprintf("%s-slot-%d", wheel.key, i)
 	}
 	return &wheel
 }
 
-func (wheel *ClusterTimeWheel) init(options *Options) {
-	wheel.Tx(func(pipe redis.Pipeliner) {
-		res := pipe.Get(options.Key)
-		if res.Err() == nil {
-			options.From(res.Val())
-		} else {
-			pipe.Set(options.Key, options.String(), time.Hour*20)
+// putTarget PutTask序列化任务
+func (wheel *ClusterTimeWheel) putTarget(target *Target) bool {
+	if !wheel.lockTarget(target.Id) {
+		return false
+	}
+
+	key := fmt.Sprintf("%s-target-%s", wheel.key, target.Id)
+	pipe := wheel.client.TxPipeline()
+	pipe.HSet(key, "ID", target.Id)
+	pipe.HSet(key, "DELAY", target.Delay)
+	pipe.HSet(key, "CIRCLE", target.Circle)
+	pipe.HSet(key, "CONTEXT", target.Context.Val())
+	pipe.HSet(key, "CALL_ID", int(target.CallId))
+	pipe.HSet(key, "DYNAMIC", target.Circle)
+	pipe.HDel(key, "LOCK")
+	if _, err := pipe.Exec(); err != nil {
+		wheel.unlockTarget(target.Id)
+		return false
+	}
+	return true
+}
+
+//getTarget 获取任务
+func (wheel *ClusterTimeWheel) getTarget(id string) (target *Target) {
+	key := fmt.Sprintf("%s-target-%s", wheel.key, id)
+	if tag := wheel.client.HGetAll(key); tag.Err() != nil {
+		return nil
+	} else {
+		kvs := tag.Val()
+		if val, ok := kvs["LOCK"]; ok && val == "LOCK" {
+			return nil
 		}
-	})
+		target = new(Target)
+		target.Id = kvs["ID"]
+		target.Circle = Int(kvs["DYNAMIC"])
+		target.Delay = Int64("DELAY")
+		target.CallId = CallId(Int("CALL_ID"))
+		target.Context = getContext(kvs["CONTEXT"])
+		return target
+	}
 }
 
-func (wheel *ClusterTimeWheel) Tx(exec func(pipe redis.Pipeliner)) {
-	pipeline := wheel.client.TxPipeline()
-	exec(pipeline)
-	_, _ = pipeline.Exec()
+func (wheel *ClusterTimeWheel) delTarget(id string) {
+	key := fmt.Sprintf("%s-target-%s", wheel.key, id)
+	wheel.client.Del(key)
 }
 
-func (wheel *ClusterTimeWheel) slotKey(index int) string {
-	return fmt.Sprintf("%s-slot-%d", wheel.key, index)
+func (wheel *ClusterTimeWheel) lockTarget(id string) bool {
+	key := fmt.Sprintf("%s-target-%s", wheel.key, id)
+	if nx := wheel.client.HSetNX(key, "LOCK", "LOCK"); nx.Err() != nil || !nx.Val() {
+		return false
+	}
+	return true
 }
 
-func (wheel *ClusterTimeWheel) taskKey(id string) string {
-	return fmt.Sprintf("%s-task-%s", wheel.key, id)
+func (wheel ClusterTimeWheel) decrTarget(id string) {
+	key := fmt.Sprintf("%s-target-%s", wheel.key, id)
+	wheel.client.HIncrBy(key, "DYNAMIC", -1)
 }
 
-func (wheel *ClusterTimeWheel) locationKey() string {
-	return fmt.Sprintf("%s-location", wheel.key)
+func (wheel *ClusterTimeWheel) unlockTarget(id string) {
+	key := fmt.Sprintf("%s-target-%s", wheel.key, id)
+	wheel.client.HDel(key, "LOCK")
 }
 
-func (wheel *ClusterTimeWheel) foreach(it func(slotKey string, taskKey string)) {
+func (wheel *ClusterTimeWheel) markLocation(id string, index int) bool {
+	key := fmt.Sprintf("%s-location", wheel.key)
+	val := fmt.Sprintf("%s-slot-%d", wheel.key, index)
+	if nx := wheel.client.HSetNX(key, id, val); nx.Err() != nil || !nx.Val() {
+		return false
+	}
+	return true
+}
+
+func (wheel *ClusterTimeWheel) UnMarkLocation(id string) {
+	key := fmt.Sprintf("%s-location", wheel.key)
+	wheel.client.HDel(key, id)
+}
+
+func (wheel *ClusterTimeWheel) getLocation(id string) (location string) {
+	key := fmt.Sprintf("%s-location", wheel.key)
+	if get := wheel.client.HGet(key, id); get.Err() != nil {
+		return ""
+	} else {
+		return get.Val()
+	}
+}
+
+func (wheel *ClusterTimeWheel) proxy(it func(id string)) {
 	rge := wheel.client.LRange(wheel.slots[wheel.currentPos], 0, -1)
 	if rge.Err() == nil {
 		for i := range rge.Val() {
-			it(wheel.slots[wheel.currentPos], wheel.taskKey(rge.Val()[i]))
+			it(rge.Val()[i])
 		}
 	}
-}
-
-func (wheel *ClusterTimeWheel) GetTask(key string) *Task {
-	all := wheel.client.HGetAll(key)
-	if all.Err() == nil {
-		if all.Val()["locker"] == "1" {
-			return nil
-		}
-
-		task := new(Task)
-		for key := range all.Val() {
-			switch key {
-			case "id":
-				task.Id = all.Val()[key]
-			case "delay":
-				task.Delay, _ = strconv.ParseInt(all.Val()[key], 10, 64)
-			case "circle":
-				task.Circle, _ = strconv.Atoi(all.Val()[key])
-			case "callId":
-				callId, _ := strconv.Atoi(all.Val()[key])
-				task.CallId = CallId(callId)
-			case "context":
-				task.Context = GetContext(all.Val()[key])
-			}
-		}
-		return task
-	}
-	return nil
 }
 
 func (wheel *ClusterTimeWheel) AddTimer(delay time.Duration, id string, ctx *Context, callId CallId) {
@@ -129,54 +182,30 @@ func (wheel *ClusterTimeWheel) AddTimer(delay time.Duration, id string, ctx *Con
 	}
 
 	if !CallExist(callId) {
-		log.Printf("addtimer call is not exist")
 		return
 	}
 
-	var task = Task{Id: id, Context: ctx, CallId: callId, Delay: int64(delay.Seconds())}
-	task.Circle = int(task.Delay / int64(wheel.interval.Seconds()) / int64(wheel.slotNums))
-	index := (wheel.currentPos + int(task.Delay)/int(wheel.interval.Seconds())) % wheel.slotNums
-	log.Printf("add index: %d circle: %d", index, task.Circle)
-	exists := wheel.client.HExists(wheel.locationKey(), task.Id)
-	if exists.Err() != nil {
-		log.Printf("add redis err: %+v", exists.Err())
-		return
+	if ctx == nil {
+		ctx = NewContext(id)
 	}
 
-	if exists.Val() {
-		log.Printf("add exist err")
-		return
+	target := new(Target)
+	target.Id = id
+	target.Context = ctx
+	target.Delay = int64(delay.Seconds())
+	target.Circle = int(target.Delay / int64(wheel.interval.Seconds()) / int64(wheel.slotNums))
+	index := (wheel.currentPos + int(target.Delay)/int(wheel.interval.Seconds())) % wheel.slotNums
+	if wheel.markLocation(target.Id, index) {
+		wheel.putTarget(target)
+		wheel.client.RPush(wheel.slots[index], id)
 	}
-
-	wheel.client.HSet(wheel.locationKey(), task.Id, wheel.slotKey(index))
-	wheel.Tx(func(pipe redis.Pipeliner) {
-		pipe.RPush(wheel.slots[index], task.Id)
-		pipe.HSet(wheel.taskKey(task.Id), "id", task.Id)
-		pipe.HSet(wheel.taskKey(task.Id), "delay", task.Delay)
-		pipe.HSet(wheel.taskKey(task.Id), "circle", task.Circle)
-		pipe.HSet(wheel.taskKey(task.Id), "callId", int(task.CallId))
-		pipe.HSet(wheel.taskKey(task.Id), "context", task.Context.String())
-	})
-
 }
 
 func (wheel *ClusterTimeWheel) RemoveTimer(id string) {
-	exists := wheel.client.HExists(wheel.locationKey(), id)
-	if exists.Err() != nil {
-		return
-	}
-
-	if exists.Val() {
-		get := wheel.client.HGet(wheel.locationKey(), id)
-		if get.Err() != nil {
-			return
-		}
-
-		wheel.Tx(func(pipe redis.Pipeliner) {
-			pipe.LRem(get.Val(), 0, id)
-			pipe.Del(wheel.taskKey(id))
-			pipe.HDel(wheel.locationKey(), id)
-		})
+	if location := wheel.getLocation(id); location != "" {
+		wheel.client.LRem(location, 0, id)
+		wheel.UnMarkLocation(id)
+		wheel.delTarget(id)
 	}
 }
 
@@ -193,33 +222,39 @@ func (wheel *ClusterTimeWheel) run() {
 }
 
 func (wheel *ClusterTimeWheel) execCallback() {
-	wheel.foreach(func(slotKey string, taskKey string) {
-		task := wheel.GetTask(taskKey)
-		if task != nil {
-			nx := wheel.client.HSetNX(taskKey, "locker", "1")
-			if nx.Err() != nil || !nx.Val() {
-				return
-			}
+	wheel.proxy(func(id string) {
+		target := wheel.getTarget(id)
+		if target == nil {
+			return
+		}
 
-			if task.Circle > 0 {
-				wheel.client.HIncrBy(taskKey, "circle", -1)
-				wheel.client.HDel(taskKey, "locker")
-				return
+		if !wheel.lockTarget(id) {
+			return
+		}
+
+		if target.Circle > 0 {
+			wheel.decrTarget(id)
+			wheel.unlockTarget(id)
+			return
+		}
+
+		defer func() {
+			if location := wheel.getLocation(id); location != "" {
+				wheel.client.LRem(location, 0, id)
+				wheel.UnMarkLocation(id)
+				wheel.delTarget(id)
+				wheel.unlockTarget(id)
 			}
-			log.Printf("task %+v", task)
-			if CallExist(task.CallId) {
-				go func(t *Task) {
-					defer func() {
-						if err := recover(); err != nil {
-							log.Printf("exec task: %+v err: %+v", t, err)
-						}
-					}()
-					GetCall(task.CallId)(task.Context)
-				}(task)
-			}
-			wheel.client.HDel(wheel.locationKey(), task.Id)
-			wheel.client.LRem(slotKey, 0, task.Id)
-			wheel.client.Del(taskKey)
+		}()
+		if CallExist(target.CallId) {
+			go func(t *Target) {
+				defer func() {
+					if err := recover(); err != nil {
+						log.Printf("exec task: %+v err: %+v", t, err)
+					}
+				}()
+				GetCall(t.CallId)(t.Context)
+			}(target)
 		}
 	})
 

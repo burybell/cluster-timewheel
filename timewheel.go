@@ -19,7 +19,7 @@ func NewContext(name string) *Context {
 	}
 }
 
-func (c Context) String() string {
+func (c Context) Val() string {
 	bytes, err := json.Marshal(c)
 	if err != nil {
 		return ""
@@ -27,7 +27,7 @@ func (c Context) String() string {
 	return string(bytes)
 }
 
-func GetContext(bytes string) *Context {
+func getContext(bytes string) *Context {
 	ctx := Context{}
 	_ = json.Unmarshal([]byte(bytes), &ctx)
 	return &ctx
@@ -82,7 +82,7 @@ func CallExist(id CallId) bool {
 	return pool.Exist(id)
 }
 
-type Task struct {
+type Target struct {
 	Id      string   `json:"id"`
 	Delay   int64    `json:"delay"`
 	Circle  int      `json:"circle"`
@@ -91,8 +91,8 @@ type Task struct {
 }
 
 type Node struct {
-	Element *Task // 任务
-	Next    *Node // 下一个节点
+	Element *Target // 任务
+	Next    *Node   // 下一个节点
 }
 
 type OrderList struct {
@@ -104,7 +104,7 @@ func NewOrderList() *OrderList {
 	return &OrderList{Header: new(Node)}
 }
 
-func (list *OrderList) Add(task *Task) {
+func (list *OrderList) Add(task *Target) {
 	var ptr = list.Header
 	for {
 		if ptr.Next == nil {
@@ -129,7 +129,7 @@ func (list *OrderList) Add(task *Task) {
 	}
 }
 
-func (list *OrderList) Remove(task *Task) {
+func (list *OrderList) Remove(task *Target) {
 	var ptr = list.Header
 	for {
 		if ptr.Next != nil {
@@ -147,7 +147,7 @@ func (list *OrderList) Remove(task *Task) {
 	}
 }
 
-func (list *OrderList) Foreach(each func(task *Task)) {
+func (list *OrderList) Foreach(each func(task *Target)) {
 	var ptr = list.Header
 	for {
 		if ptr.Next != nil {
@@ -159,7 +159,7 @@ func (list *OrderList) Foreach(each func(task *Task)) {
 	}
 }
 
-func (list *OrderList) Consumer(each func(task *Task) bool) {
+func (list *OrderList) Consumer(each func(task *Target) bool) {
 	var ptr = list.Header
 	var del = false
 	list.locker.Lock()

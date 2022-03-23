@@ -3,6 +3,7 @@ package timewheel
 import (
 	"fmt"
 	"github.com/go-redis/redis"
+	"math/rand"
 	"testing"
 	"time"
 )
@@ -13,11 +14,7 @@ func TestCluster(t *testing.T) {
 		Addr: "127.0.0.1:6379",
 	})
 
-	wheel := NewCluster(client, Options{
-		Key:      "redis-wheel",
-		Interval: time.Second,
-		SlotNums: 60,
-	})
+	wheel := NewCluster(client, "redis-wheel-7", nil)
 
 	wheel.Run()
 
@@ -42,11 +39,7 @@ func TestClusterClient1(t *testing.T) {
 		Addr: "127.0.0.1:6379",
 	})
 
-	wheel := NewCluster(client, Options{
-		Key:      "redis-wheel",
-		Interval: time.Second,
-		SlotNums: 60,
-	})
+	wheel := NewCluster(client, "redis-wheel-5", nil)
 
 	wheel.Run()
 
@@ -56,7 +49,7 @@ func TestClusterClient1(t *testing.T) {
 			tp = Call2
 		}
 		ctx := NewContext("cl1")
-		wheel.AddTimer(time.Second*time.Duration(i), fmt.Sprintf("id-%d", i), ctx, tp)
+		wheel.AddTimer(time.Second*time.Duration(rand.Int63n(100)), fmt.Sprintf("id-%d", i), ctx, tp)
 	}
 	select {}
 
@@ -68,11 +61,7 @@ func TestClusterClient2(t *testing.T) {
 		Addr: "127.0.0.1:6379",
 	})
 
-	wheel := NewCluster(client, Options{
-		Key:      "redis-wheel",
-		Interval: time.Second,
-		SlotNums: 60,
-	})
+	wheel := NewCluster(client, "redis-wheel-5", nil)
 
 	wheel.Run()
 
@@ -82,7 +71,7 @@ func TestClusterClient2(t *testing.T) {
 			tp = Call2
 		}
 		ctx := NewContext("cl2")
-		wheel.AddTimer(time.Second*time.Duration(i), fmt.Sprintf("id-%d", i), ctx, tp)
+		wheel.AddTimer(time.Second*time.Duration(rand.Int63n(100)), fmt.Sprintf("id-%d", i), ctx, tp)
 	}
 	select {}
 

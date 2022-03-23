@@ -13,7 +13,7 @@ type LocalTimeWheel struct {
 	location   map[string]int
 	currentPos int
 	slotNums   int
-	addChan    chan Task
+	addChan    chan Target
 	removeChan chan string
 	stopChan   chan struct{}
 }
@@ -30,7 +30,7 @@ func NewLocal(interval time.Duration, slotNums ...int) TimeWheel {
 		wheel.slotNums = 60
 	}
 
-	wheel.addChan = make(chan Task, 10)
+	wheel.addChan = make(chan Target, 10)
 	wheel.removeChan = make(chan string)
 	wheel.stopChan = make(chan struct{})
 	wheel.location = make(map[string]int)
@@ -78,12 +78,12 @@ func (wheel *LocalTimeWheel) AddTimer(delay time.Duration, id string, ctx *Conte
 		return
 	}
 
-	var task = Task{Id: id, Context: ctx, CallId: callId, Delay: int64(delay.Seconds())}
+	var task = Target{Id: id, Context: ctx, CallId: callId, Delay: int64(delay.Seconds())}
 
 	wheel.addChan <- task
 }
 
-func (wheel *LocalTimeWheel) addCallback(task Task) {
+func (wheel *LocalTimeWheel) addCallback(task Target) {
 	task.Circle = int(task.Delay / int64(wheel.interval.Seconds()) / int64(wheel.slotNums))
 	index := (wheel.currentPos + int(task.Delay)/int(wheel.interval.Seconds())) % wheel.slotNums
 	log.Printf("add index: %d circle: %d", index, task.Circle)
@@ -93,19 +93,19 @@ func (wheel *LocalTimeWheel) addCallback(task Task) {
 
 func (wheel *LocalTimeWheel) removeCallback(id string) {
 	if pos, ok := wheel.location[id]; ok {
-		wheel.slots[pos].Remove(&Task{Id: id})
+		wheel.slots[pos].Remove(&Target{Id: id})
 	}
 }
 
 func (wheel *LocalTimeWheel) execCallback() {
-	wheel.slots[wheel.currentPos].Consumer(func(task *Task) bool {
+	wheel.slots[wheel.currentPos].Consumer(func(task *Target) bool {
 		if task.Circle > 0 {
 			task.Circle--
 			return false
 		}
 		log.Printf("task %+v", task)
 		if CallExist(task.CallId) {
-			go func(t *Task) {
+			go func(t *Target) {
 				defer func() {
 					if err := recover(); err != nil {
 						log.Printf("exec task: %+v err: %+v", t, err)
