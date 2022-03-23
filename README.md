@@ -5,7 +5,7 @@ go实现的时间轮，可单机可分布式
 
 ### 安装
 ```cmd
-go get github.com/burybell/cluster-timewheel@v1.0.1
+go get github.com/burybell/cluster-timewheel@v1.0.3
 ```
 
 ### 案例
