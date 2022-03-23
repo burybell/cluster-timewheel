@@ -5,7 +5,7 @@ go实现的时间轮，可单机可分布式
 
 ### 安装
 ```cmd
-go get gitee.com/burybell/cluster-timewheel@v1.0.0
+go get gitee.com/burybell/cluster-timewheel@v1.0.1
 ```
 
 ### 案例
@@ -21,15 +21,14 @@ import (
 )
 
 const (
-	Call1 timewheel.CallId = iota
+	CallPrint timewheel.CallId = iota
 )
 
 func init() {
 
-	timewheel.AddCall(Call1, func(ctx *timewheel.Context) {
-		fmt.Println("call1", ctx.String())
+	timewheel.AddCall(CallPrint, func(ctx *timewheel.Context) {
+		fmt.Println("call1", ctx.Val())
 	})
-
 }
 
 func main() {
@@ -40,7 +39,7 @@ func main() {
 
 	for i := 0; i < 1000; i++ {
 		context := timewheel.NewContext("cl1")
-		local.AddTimer(time.Second*time.Duration(i), fmt.Sprintf("id-%d", i), context, Call1)
+		local.AddTimer(time.Second*time.Duration(i), fmt.Sprintf("id-%d", i), context, CallPrint)
 	}
 
 	select {}
@@ -61,13 +60,13 @@ import (
 )
 
 const (
-	Call1 timewheel.CallId = iota
+	CallPrint timewheel.CallId = iota
 )
 
 func init() {
 
-	timewheel.AddCall(Call1, func(ctx *timewheel.Context) {
-		fmt.Println("call1", ctx.String())
+	timewheel.AddCall(CallPrint, func(ctx *timewheel.Context) {
+		fmt.Println("call1", ctx.Val())
 	})
 
 }
@@ -75,17 +74,12 @@ func init() {
 func main() {
 
 	client := redis.NewClient(&redis.Options{Addr: "127.0.0.1:6379"})
-	cluster := timewheel.NewCluster(client, timewheel.Options{
-		Key:      "test",
-		Interval: time.Second,
-		SlotNums: 60,
-	})
+	cluster := timewheel.NewCluster(client, "wheel-name", nil)
 
 	cluster.Run()
 
 	for i := 0; i < 1000; i++ {
-		context := timewheel.NewContext("cl1")
-		cluster.AddTimer(time.Second*time.Duration(i), fmt.Sprintf("id-%d", i), context, Call1)
+		cluster.AddTimer(time.Second*time.Duration(i), fmt.Sprintf("id-%d", i), nil, CallPrint)
 	}
 
 	select {}
