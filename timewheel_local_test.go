@@ -15,15 +15,18 @@ const (
 func init() {
 	AddCall(Call1, func(ctx *Context) {
 		fmt.Println("call1", ctx.Name)
+		time.Sleep(time.Second * 10)
 	})
 
 	AddCall(Call2, func(ctx *Context) {
 		fmt.Println("call2", ctx.Name)
+		time.Sleep(time.Second * 10)
 		panic("run")
 	})
 
 	AddCall(Call3, func(ctx *Context) {
 		fmt.Println("call3", ctx.Name)
+		time.Sleep(time.Second * 10)
 	})
 }
 

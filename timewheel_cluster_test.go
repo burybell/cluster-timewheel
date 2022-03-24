@@ -2,10 +2,11 @@ package timewheel
 
 import (
 	"fmt"
-	"github.com/go-redis/redis"
 	"math/rand"
 	"testing"
 	"time"
+
+	"github.com/go-redis/redis"
 )
 
 func TestCluster(t *testing.T) {
@@ -14,7 +15,12 @@ func TestCluster(t *testing.T) {
 		Addr: "127.0.0.1:6379",
 	})
 
-	wheel := NewCluster(client, "redis-wheel-7", nil)
+	wheel := NewCluster(client, "redis-wheel-7", &Options{
+		Interval:         time.Second,
+		SlotNums:         60,
+		WorkPool:         true,
+		WorkPoolCapacity: 10,
+	})
 
 	wheel.Run()
 

@@ -2,22 +2,27 @@ package timewheel
 
 import (
 	"fmt"
-	"github.com/go-redis/redis"
 	"log"
 	"strings"
 	"time"
+
+	"github.com/go-redis/redis"
 )
 
 type Options struct {
-	Interval time.Duration `json:"interval,omitempty"`
-	SlotNums int           `json:"slotNums,omitempty"`
-	MergeVal bool          `json:"merge,omitempty"`
+	Interval         time.Duration `json:"interval,omitempty"`
+	SlotNums         int           `json:"slotNums,omitempty"`
+	MergeVal         bool          `json:"merge,omitempty"`
+	WorkPool         bool          `json:"workPool,omitempty"`
+	WorkPoolCapacity int           `json:"workPoolCapacity,omitempty"`
 }
 
 func (options *Options) normalize() {
 	options.Interval = time.Second
 	options.SlotNums = 60
 	options.MergeVal = false
+	options.WorkPool = false
+	options.WorkPoolCapacity = 10
 }
 
 func (options *Options) Val() string {
@@ -36,14 +41,16 @@ func newOptions(value string) *Options {
 }
 
 type ClusterTimeWheel struct {
-	key        string
-	interval   time.Duration
-	ticker     *time.Ticker
-	slotNums   int
-	currentPos int
-	slots      []string
-	client     *redis.Client
-	stopChan   chan struct{}
+	key            string
+	interval       time.Duration
+	ticker         *time.Ticker
+	slotNums       int
+	currentPos     int
+	slots          []string
+	client         *redis.Client
+	stopChan       chan struct{}
+	enableWorkPool bool
+	workPool       *workPool
 }
 
 func NewCluster(client *redis.Client, key string, options *Options) TimeWheel {
@@ -73,6 +80,10 @@ func NewCluster(client *redis.Client, key string, options *Options) TimeWheel {
 	wheel.slotNums = options.SlotNums
 	wheel.slots = make([]string, wheel.slotNums)
 	wheel.stopChan = make(chan struct{})
+	wheel.enableWorkPool = options.WorkPool
+	if wheel.enableWorkPool {
+		wheel.workPool = NewWorkPool(options.WorkPoolCapacity)
+	}
 	for i := 0; i < wheel.slotNums; i++ {
 		wheel.slots[i] = fmt.Sprintf("%s-slot-%d", wheel.key, i)
 	}
@@ -192,7 +203,7 @@ func (wheel *ClusterTimeWheel) AddTimer(delay time.Duration, id string, ctx *Con
 	target := new(Target)
 	target.Id = id
 	target.Context = ctx
-    target.CallId = callId
+	target.CallId = callId
 	target.Delay = int64(delay.Seconds())
 	target.Circle = int(target.Delay / int64(wheel.interval.Seconds()) / int64(wheel.slotNums))
 	index := (wheel.currentPos + int(target.Delay)/int(wheel.interval.Seconds())) % wheel.slotNums
@@ -248,14 +259,29 @@ func (wheel *ClusterTimeWheel) execCallback() {
 			}
 		}()
 		if CallExist(target.CallId) {
-			go func(t *Target) {
-				defer func() {
-					if err := recover(); err != nil {
-						log.Printf("exec task: %+v err: %+v", t, err)
+			if wheel.enableWorkPool {
+				wheel.workPool.Put(func(args ...interface{}) {
+					if len(args) > 0 {
+						if target, ok := args[0].(*Target); ok {
+							defer func() {
+								if err := recover(); err != nil {
+									log.Printf("exec task: %+v err: %+v", target, err)
+								}
+							}()
+							GetCall(target.CallId)(target.Context)
+						}
 					}
-				}()
-				GetCall(t.CallId)(t.Context)
-			}(target)
+				}, target)
+			} else {
+				go func(t *Target) {
+					defer func() {
+						if err := recover(); err != nil {
+							log.Printf("exec task: %+v err: %+v", t, err)
+						}
+					}()
+					GetCall(t.CallId)(t.Context)
+				}(target)
+			}
 		}
 	})
 
@@ -267,10 +293,18 @@ func (wheel *ClusterTimeWheel) execCallback() {
 }
 
 func (wheel *ClusterTimeWheel) Run() TimeWheel {
+
+	if wheel.enableWorkPool {
+		wheel.workPool.Run()
+	}
+
 	go wheel.run()
 	return wheel
 }
 
 func (wheel *ClusterTimeWheel) Stop() {
 	wheel.stopChan <- struct{}{}
+	if wheel.enableWorkPool {
+		wheel.workPool.Stop()
+	}
 }
