@@ -70,6 +70,10 @@ func (wheel *LocalTimeWheel) AddTimer(delay time.Duration, id string, ctx *Conte
 	if delay < 0 {
 		return
 	}
+    
+    if ctx == nil {
+        ctx = NewContext(id)
+    }
 
 	if index, ok := wheel.location[id]; ok {
 		log.Printf("addtimer exist in %d", index)
