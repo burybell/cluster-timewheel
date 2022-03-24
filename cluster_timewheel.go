@@ -114,8 +114,8 @@ func (wheel *ClusterTimeWheel) getTarget(id string) (target *Target) {
 		target = new(Target)
 		target.Id = kvs["ID"]
 		target.Circle = Int(kvs["DYNAMIC"])
-		target.Delay = Int64("DELAY")
-		target.CallId = CallId(Int("CALL_ID"))
+		target.Delay = Int64(kvs["DELAY"])
+		target.CallId = CallId(Int(kvs["CALL_ID"]))
 		target.Context = getContext(kvs["CONTEXT"])
 		return target
 	}

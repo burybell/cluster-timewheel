@@ -3,6 +3,7 @@ package timewheel
 import (
 	"log"
 	"time"
+    "sync"
 )
 
 // LocalTimeWheel 基于本地内存实现
@@ -11,6 +12,7 @@ type LocalTimeWheel struct {
 	ticker     *time.Ticker
 	slots      []*OrderList
 	location   map[string]int
+    locker sync.Mutex
 	currentPos int
 	slotNums   int
 	addChan    chan Target
@@ -34,6 +36,7 @@ func NewLocal(interval time.Duration, slotNums ...int) TimeWheel {
 	wheel.removeChan = make(chan string)
 	wheel.stopChan = make(chan struct{})
 	wheel.location = make(map[string]int)
+    wheel.locker = sync.Mutex{}
 	wheel.slots = make([]*OrderList, wheel.slotNums)
 	for i := 0; i < wheel.slotNums; i++ {
 		wheel.slots[i] = NewOrderList()
@@ -86,9 +89,10 @@ func (wheel *LocalTimeWheel) AddTimer(delay time.Duration, id string, ctx *Conte
 func (wheel *LocalTimeWheel) addCallback(task Target) {
 	task.Circle = int(task.Delay / int64(wheel.interval.Seconds()) / int64(wheel.slotNums))
 	index := (wheel.currentPos + int(task.Delay)/int(wheel.interval.Seconds())) % wheel.slotNums
-	log.Printf("add index: %d circle: %d", index, task.Circle)
-	wheel.slots[index].Add(&task)
+	wheel.locker.Lock()
+    wheel.slots[index].Add(&task)
 	wheel.location[task.Id] = index
+    wheel.locker.Unlock()
 }
 
 func (wheel *LocalTimeWheel) removeCallback(id string) {
