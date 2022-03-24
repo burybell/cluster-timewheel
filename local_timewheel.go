@@ -111,7 +111,6 @@ func (wheel *LocalTimeWheel) execCallback() {
 			task.Circle--
 			return false
 		}
-		log.Printf("task %+v", task)
 		if CallExist(task.CallId) {
 			go func(t *Target) {
 				defer func() {
