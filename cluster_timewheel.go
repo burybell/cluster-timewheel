@@ -104,7 +104,7 @@ func (wheel *ClusterTimeWheel) putTarget(target *Target) bool {
 //getTarget 获取任务
 func (wheel *ClusterTimeWheel) getTarget(id string) (target *Target) {
 	key := fmt.Sprintf("%s-target-%s", wheel.key, id)
-	if tag := wheel.client.HGetAll(key); tag.Err() != nil {
+	if tag := wheel.client.HGetAll(key); tag.Err() != nil || len(tag.Val()) == 0 {
 		return nil
 	} else {
 		kvs := tag.Val()
