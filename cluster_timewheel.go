@@ -192,6 +192,7 @@ func (wheel *ClusterTimeWheel) AddTimer(delay time.Duration, id string, ctx *Con
 	target := new(Target)
 	target.Id = id
 	target.Context = ctx
+    target.CallId = callId
 	target.Delay = int64(delay.Seconds())
 	target.Circle = int(target.Delay / int64(wheel.interval.Seconds()) / int64(wheel.slotNums))
 	index := (wheel.currentPos + int(target.Delay)/int(wheel.interval.Seconds())) % wheel.slotNums
