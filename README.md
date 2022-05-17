@@ -12,7 +12,7 @@ package main
 
 import (
 	"fmt"
-	timewheel "gitee.com/burybell/cluster-timewheel"
+	timewheel "github.com/burybell/cluster-timewheel"
 	"time"
 )
 
@@ -49,7 +49,7 @@ package main
 
 import (
 	"fmt"
-	timewheel "gitee.com/burybell/cluster-timewheel"
+	timewheel "github.com/burybell/cluster-timewheel"
 	"github.com/go-redis/redis"
 	"time"
 )
